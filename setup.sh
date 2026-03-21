@@ -48,8 +48,10 @@ ensure_path() {
 
   while IFS= read -r p; do
     local expanded="${p/#\$HOME/$HOME}"
+    # normalize: strip $HOME and ~/  for robust grep matching
+    local pattern="${expanded/#$HOME/}"
     if ! echo "$PATH" | tr ':' '\n' | grep -qF "$expanded"; then
-      if ! grep -qF "$expanded" "$shell_rc" 2>/dev/null; then
+      if ! grep -q "$pattern" "$shell_rc" 2>/dev/null; then
         echo "export PATH=\"\$PATH:$p\"" >> "$shell_rc"
         log_ok "Added $p to $shell_rc"
       fi
