@@ -1,11 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-# Dorian's Claude Code Plugin Setup
-# Usage: ./setup.sh [--binaries-only | --plugins-only | --check]
+# Dorian's Claude Code Plugin Marketplace
+# Usage: ./setup.sh [--check]
+#
+# What it does:
+#   1. Register this repo as a Claude Code marketplace
+#   2. Install local plugins (from ./plugins/)
+#   3. Install external plugins (official LSP etc.) with their binaries
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGINS_JSON="$SCRIPT_DIR/plugins.json"
+CONFIG="$SCRIPT_DIR/plugins.json"
+MARKETPLACE_NAME="dorian-plugins"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -18,37 +24,30 @@ log_ok()    { echo -e "${GREEN}✓${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}⚠${NC} $1"; }
 log_err()   { echo -e "${RED}✗${NC} $1"; }
 
-# --------------- dependency check ---------------
+# --------------- pre-checks ---------------
 
-check_jq() {
-  if ! command -v jq &>/dev/null; then
-    log_info "jq not found, installing via Homebrew..."
-    if command -v brew &>/dev/null; then
-      brew install jq
-    else
-      log_err "jq is required but Homebrew is not available. Install jq manually."
-      exit 1
-    fi
-  fi
-}
-
-check_claude() {
+preflight() {
   if ! command -v claude &>/dev/null; then
     log_err "claude CLI not found. Install Claude Code first."
     exit 1
   fi
+  if ! command -v jq &>/dev/null; then
+    log_info "jq not found, installing via Homebrew..."
+    brew install jq
+  fi
 }
 
-# --------------- PATH helpers ---------------
+# --------------- PATH ---------------
 
 ensure_path() {
   local shell_rc="$HOME/.zshrc"
   local paths
-  paths=$(jq -r '.path_additions[]' "$PLUGINS_JSON")
+  paths=$(jq -r '.path_additions // [] | .[]' "$CONFIG")
+
+  [[ -z "$paths" ]] && return
 
   while IFS= read -r p; do
     local expanded="${p/#\$HOME/$HOME}"
-    # normalize: strip $HOME and ~/  for robust grep matching
     local pattern="${expanded/#$HOME/}"
     if ! echo "$PATH" | tr ':' '\n' | grep -qF "$expanded"; then
       if ! grep -q "$pattern" "$shell_rc" 2>/dev/null; then
@@ -60,108 +59,160 @@ ensure_path() {
   done <<< "$paths"
 }
 
-# --------------- binary installation ---------------
+# --------------- marketplace registration ---------------
 
-install_binaries() {
-  log_info "Installing language server binaries..."
-  echo ""
-
-  local count
-  count=$(jq '.plugins | length' "$PLUGINS_JSON")
-
-  for ((i=0; i<count; i++)); do
-    local name check_cmd install_cmd
-    name=$(jq -r ".plugins[$i].name" "$PLUGINS_JSON")
-    check_cmd=$(jq -r ".plugins[$i].binary.check" "$PLUGINS_JSON")
-    install_cmd=$(jq -r ".plugins[$i].binary.install" "$PLUGINS_JSON")
-
-    if command -v "$check_cmd" &>/dev/null; then
-      log_ok "$name — binary already installed ($(which "$check_cmd"))"
-    else
-      log_info "$name — installing binary..."
-      if eval "$install_cmd" 2>&1; then
-        # re-check after install (some binaries land in path_hint dirs)
-        ensure_path
-        if command -v "$check_cmd" &>/dev/null; then
-          log_ok "$name — binary installed"
-        else
-          log_warn "$name — install ran but binary not found in PATH"
-        fi
-      else
-        log_err "$name — binary installation failed"
-      fi
-    fi
-  done
-  echo ""
+register_marketplace() {
+  if claude plugin marketplace list 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
+    log_ok "Marketplace '$MARKETPLACE_NAME' already registered"
+  else
+    log_info "Registering marketplace '$MARKETPLACE_NAME'..."
+    claude plugin marketplace add "$SCRIPT_DIR" --name "$MARKETPLACE_NAME" 2>&1
+    log_ok "Marketplace registered"
+  fi
 }
 
-# --------------- plugin installation ---------------
+# --------------- local plugins (from this repo) ---------------
 
-install_plugins() {
-  log_info "Installing Claude Code plugins..."
-  echo ""
+install_local_plugins() {
+  local plugins_dir="$SCRIPT_DIR/plugins"
+  local found=0
 
-  local count
-  count=$(jq '.plugins | length' "$PLUGINS_JSON")
+  for plugin_dir in "$plugins_dir"/*/; do
+    [[ -d "$plugin_dir" ]] || continue
+    local name
+    name=$(basename "$plugin_dir")
+    found=1
 
-  for ((i=0; i<count; i++)); do
-    local name marketplace
-    name=$(jq -r ".plugins[$i].name" "$PLUGINS_JSON")
-    marketplace=$(jq -r ".plugins[$i].marketplace" "$PLUGINS_JSON")
-
-    local plugin_ref="${name}@${marketplace}"
-
-    # check if already installed
-    if claude plugin list 2>/dev/null | grep -q "$name"; then
-      log_ok "$plugin_ref — already installed"
+    local ref="${name}@${MARKETPLACE_NAME}"
+    if claude plugin list 2>/dev/null | grep -q "$name.*$MARKETPLACE_NAME"; then
+      log_ok "$ref — already installed"
     else
-      log_info "$plugin_ref — installing..."
-      if claude plugin install "$plugin_ref" 2>&1; then
-        log_ok "$plugin_ref — installed"
+      log_info "$ref — installing..."
+      if claude plugin install "$ref" 2>&1; then
+        log_ok "$ref — installed"
       else
-        log_err "$plugin_ref — installation failed"
+        log_err "$ref — installation failed"
       fi
     fi
   done
+
+  [[ $found -eq 0 ]] && log_info "No local plugins yet"
+}
+
+# --------------- external plugins (official marketplace etc.) ---------------
+
+install_external_plugins() {
+  local count
+  count=$(jq '.external_plugins // [] | length' "$CONFIG")
+
+  [[ $count -eq 0 ]] && return
+
+  log_info "Installing external plugins..."
   echo ""
+
+  for ((i=0; i<count; i++)); do
+    local name marketplace check_cmd install_cmd
+    name=$(jq -r ".external_plugins[$i].name" "$CONFIG")
+    marketplace=$(jq -r ".external_plugins[$i].marketplace" "$CONFIG")
+    check_cmd=$(jq -r ".external_plugins[$i].binary.check // empty" "$CONFIG")
+    install_cmd=$(jq -r ".external_plugins[$i].binary.install // empty" "$CONFIG")
+
+    # install binary if needed
+    if [[ -n "$check_cmd" && -n "$install_cmd" ]]; then
+      if command -v "$check_cmd" &>/dev/null; then
+        log_ok "$name — binary ready ($(which "$check_cmd"))"
+      else
+        log_info "$name — installing binary..."
+        if eval "$install_cmd" 2>&1; then
+          ensure_path
+          if command -v "$check_cmd" &>/dev/null; then
+            log_ok "$name — binary installed"
+          else
+            log_warn "$name — binary not found in PATH after install"
+          fi
+        else
+          log_err "$name — binary installation failed"
+        fi
+      fi
+    fi
+
+    # install Claude plugin
+    local ref="${name}@${marketplace}"
+    if claude plugin list 2>/dev/null | grep -q "$name"; then
+      log_ok "$ref — plugin ready"
+    else
+      log_info "$ref — installing plugin..."
+      if claude plugin install "$ref" 2>&1; then
+        log_ok "$ref — installed"
+      else
+        log_err "$ref — plugin installation failed"
+      fi
+    fi
+    echo ""
+  done
 }
 
 # --------------- status check ---------------
 
 check_status() {
   echo ""
-  log_info "Plugin status check"
+  log_info "Status"
   echo "─────────────────────────────────────────"
 
+  # marketplace
+  echo -e "  ${CYAN}Marketplace${NC}"
+  if claude plugin marketplace list 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
+    echo -e "    $MARKETPLACE_NAME: ${GREEN}✓${NC} registered"
+  else
+    echo -e "    $MARKETPLACE_NAME: ${RED}✗${NC} not registered"
+  fi
+  echo ""
+
+  # local plugins
+  echo -e "  ${CYAN}Local Plugins${NC}"
+  local found_local=0
+  for plugin_dir in "$SCRIPT_DIR/plugins"/*/; do
+    [[ -d "$plugin_dir" ]] || continue
+    found_local=1
+    local name
+    name=$(basename "$plugin_dir")
+    if claude plugin list 2>/dev/null | grep -q "$name"; then
+      echo -e "    $name: ${GREEN}✓${NC}"
+    else
+      echo -e "    $name: ${RED}✗${NC}"
+    fi
+  done
+  [[ $found_local -eq 0 ]] && echo -e "    (none)"
+  echo ""
+
+  # external plugins
+  echo -e "  ${CYAN}External Plugins${NC}"
   local count
-  count=$(jq '.plugins | length' "$PLUGINS_JSON")
+  count=$(jq '.external_plugins // [] | length' "$CONFIG")
 
   for ((i=0; i<count; i++)); do
-    local name check_cmd marketplace desc
-    name=$(jq -r ".plugins[$i].name" "$PLUGINS_JSON")
-    check_cmd=$(jq -r ".plugins[$i].binary.check" "$PLUGINS_JSON")
-    marketplace=$(jq -r ".plugins[$i].marketplace" "$PLUGINS_JSON")
-    desc=$(jq -r ".plugins[$i].description" "$PLUGINS_JSON")
+    local name check_cmd
+    name=$(jq -r ".external_plugins[$i].name" "$CONFIG")
+    check_cmd=$(jq -r ".external_plugins[$i].binary.check // empty" "$CONFIG")
 
-    local binary_status plugin_status
-
-    if command -v "$check_cmd" &>/dev/null; then
-      binary_status="${GREEN}✓${NC}"
+    local b_status p_status
+    if [[ -n "$check_cmd" ]] && command -v "$check_cmd" &>/dev/null; then
+      b_status="${GREEN}✓${NC}"
+    elif [[ -n "$check_cmd" ]]; then
+      b_status="${RED}✗${NC}"
     else
-      binary_status="${RED}✗${NC}"
+      b_status="-"
     fi
 
     if claude plugin list 2>/dev/null | grep -q "$name"; then
-      plugin_status="${GREEN}✓${NC}"
+      p_status="${GREEN}✓${NC}"
     else
-      plugin_status="${RED}✗${NC}"
+      p_status="${RED}✗${NC}"
     fi
 
-    echo -e "  $name"
-    echo -e "    Binary: $binary_status  Plugin: $plugin_status"
-    echo -e "    ${CYAN}$desc${NC}"
-    echo ""
+    echo -e "    $name  binary:$b_status  plugin:$p_status"
   done
+  echo ""
 }
 
 # --------------- main ---------------
@@ -169,30 +220,25 @@ check_status() {
 main() {
   echo ""
   echo "╔══════════════════════════════════════════╗"
-  echo "║   Dorian's Claude Code Plugin Setup      ║"
+  echo "║   Dorian's Claude Code Plugins           ║"
   echo "╚══════════════════════════════════════════╝"
   echo ""
 
-  check_jq
-  check_claude
+  preflight
 
-  case "${1:-all}" in
-    --binaries-only)
-      ensure_path
-      install_binaries
-      ;;
-    --plugins-only)
-      install_plugins
-      ;;
+  case "${1:-install}" in
     --check)
       ensure_path
       check_status
       ;;
-    all|*)
+    *)
       ensure_path
-      install_binaries
-      install_plugins
-      log_info "Restart Claude Code to activate LSP plugins."
+      register_marketplace
+      echo ""
+      install_local_plugins
+      echo ""
+      install_external_plugins
+      log_info "Restart Claude Code to activate."
       check_status
       ;;
   esac

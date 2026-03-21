@@ -1,35 +1,28 @@
 {
-  "plugins": [
+  "external_plugins": [
     {
       "name": "typescript-lsp",
       "marketplace": "claude-plugins-official",
-      "description": "TypeScript/JavaScript LSP - type checking, go-to-definition, find references",
       "binary": {
         "install": "npm install -g typescript-language-server typescript",
         "check": "typescript-language-server"
-      },
-      "extensions": [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]
+      }
     },
     {
       "name": "gopls-lsp",
       "marketplace": "claude-plugins-official",
-      "description": "Go LSP - type checking, navigation, diagnostics",
       "binary": {
         "install": "go install golang.org/x/tools/gopls@latest",
-        "check": "gopls",
-        "path_hint": "$HOME/go/bin"
-      },
-      "extensions": [".go"]
+        "check": "gopls"
+      }
     },
     {
       "name": "pyright-lsp",
       "marketplace": "claude-plugins-official",
-      "description": "Python LSP (Pyright) - type checking, diagnostics",
       "binary": {
         "install": "npm install -g pyright",
         "check": "pyright"
-      },
-      "extensions": [".py", ".pyi"]
+      }
     }
   ],
   "path_additions": [
