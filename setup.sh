@@ -111,11 +111,20 @@ install_external_plugins() {
   echo ""
 
   for ((i=0; i<count; i++)); do
-    local name marketplace check_cmd install_cmd
+    local name marketplace check_cmd install_cmd marketplace_source
     name=$(jq -r ".external_plugins[$i].name" "$CONFIG")
     marketplace=$(jq -r ".external_plugins[$i].marketplace" "$CONFIG")
     check_cmd=$(jq -r ".external_plugins[$i].binary.check // empty" "$CONFIG")
     install_cmd=$(jq -r ".external_plugins[$i].binary.install // empty" "$CONFIG")
+    marketplace_source=$(jq -r ".external_plugins[$i].marketplace_source // empty" "$CONFIG")
+
+    # register third-party marketplace if needed
+    if [[ -n "$marketplace_source" ]]; then
+      if ! claude plugin marketplace list 2>/dev/null | grep -q "$marketplace"; then
+        log_info "Registering marketplace '$marketplace'..."
+        claude plugin marketplace add "$marketplace_source" 2>&1
+      fi
+    fi
 
     # install binary if needed
     if [[ -n "$check_cmd" && -n "$install_cmd" ]]; then

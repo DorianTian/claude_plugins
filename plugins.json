@@ -1,6 +1,23 @@
 {
   "external_plugins": [
     {
+      "name": "superpowers",
+      "marketplace": "claude-plugins-official"
+    },
+    {
+      "name": "frontend-design",
+      "marketplace": "claude-plugins-official"
+    },
+    {
+      "name": "skill-creator",
+      "marketplace": "claude-plugins-official"
+    },
+    {
+      "name": "planning-with-files",
+      "marketplace": "planning-with-files",
+      "marketplace_source": "github:OthmanAdi/planning-with-files"
+    },
+    {
       "name": "typescript-lsp",
       "marketplace": "claude-plugins-official",
       "binary": {
