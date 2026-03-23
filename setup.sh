@@ -66,7 +66,7 @@ register_marketplace() {
     log_ok "Marketplace '$MARKETPLACE_NAME' already registered"
   else
     log_info "Registering marketplace '$MARKETPLACE_NAME'..."
-    claude plugin marketplace add "$SCRIPT_DIR" --name "$MARKETPLACE_NAME" 2>&1
+    claude plugin marketplace add "$SCRIPT_DIR" 2>&1
     log_ok "Marketplace registered"
   fi
 }
