@@ -13,6 +13,18 @@
       "marketplace": "claude-plugins-official"
     },
     {
+      "name": "code-review",
+      "marketplace": "claude-plugins-official"
+    },
+    {
+      "name": "feature-dev",
+      "marketplace": "claude-plugins-official"
+    },
+    {
+      "name": "commit-commands",
+      "marketplace": "claude-plugins-official"
+    },
+    {
       "name": "planning-with-files",
       "marketplace": "planning-with-files",
       "marketplace_source": "github:OthmanAdi/planning-with-files"
